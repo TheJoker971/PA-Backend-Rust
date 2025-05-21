@@ -1,7 +1,7 @@
-use axum::Router;
+use axum::{Router, serve};
 use dotenvy::dotenv;
 use std::env;
-use tokio;
+use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 
 mod db;
@@ -15,11 +15,13 @@ async fn main() {
     let app = routes::create_router().layer(TraceLayer::new_for_http());
 
     let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-    let addr = format!("0.0.0.0:{}", port).parse().unwrap();
+    let addr = format!("0.0.0.0:{}", port);
+
+    let listener = TcpListener::bind(&addr)
+        .await
+        .expect("Failed to bind to address");
+
     println!("🚀 Server running on http://{}", addr);
 
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    serve(listener, app).await.unwrap();
 }
