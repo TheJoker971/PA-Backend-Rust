@@ -8,6 +8,8 @@ use std::fs;
 
 mod db;
 mod routes;
+mod models;
+
 
 #[tokio::main]
 async fn main() {
