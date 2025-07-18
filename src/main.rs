@@ -241,14 +241,6 @@ async fn main() {
     let secret = SecretGenerator::new().generate();
     let csrf_layer = CsurfLayer::new(CsrfConfig::new(secret));
 
-    // Routes pour les rôles (protégées par admin)
-    let roles_routes = Router::new()
-        .route("/", post(auth::create_role))
-        .route("/", get(auth::get_roles))
-        .route("/:role_id", delete(auth::delete_role))
-        .route("/signature/:signature", get(auth::get_signature_role))
-        .route_layer(middleware::from_fn(require_admin_role));
-
     // Routes pour les propriétés
     let properties_routes = Router::new()
         // Routes publiques (propriétés validées uniquement)
@@ -287,7 +279,6 @@ async fn main() {
         // Health check
         .route("/health", get(routes::health_check))
         // Nested routes
-        .nest("/roles", roles_routes)
         .nest("/properties", properties_routes)
         .nest("/investments", investments_routes)
         .nest("/users", users_routes)

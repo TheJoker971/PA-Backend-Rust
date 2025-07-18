@@ -335,13 +335,17 @@ pub async fn create_user(
     State(pool): State<PgPool>,
     Json(payload): Json<crate::models::CreateUserRequest>,
 ) -> impl IntoResponse {
+    // Déterminer le rôle (par défaut "user" si non spécifié)
+    let role = payload.role.unwrap_or_else(|| "user".to_string());
+
     // Créer l'utilisateur
     let result = sqlx::query!(
-        r#"INSERT INTO users (signature, name)
-        VALUES ($1, $2)
+        r#"INSERT INTO users (signature, name, role)
+        VALUES ($1, $2, $3)
         RETURNING id"#,
         payload.signature,
-        payload.name
+        payload.name,
+        role
     )
     .fetch_one(&pool)
     .await;

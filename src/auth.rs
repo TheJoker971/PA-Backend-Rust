@@ -37,7 +37,7 @@ pub async fn login(
     // Récupérer l'utilisateur par signature
     let user = match sqlx::query_as!(
         User,
-        r#"SELECT id, signature, name, created_at
+        r#"SELECT id, signature, name, role, created_at
            FROM users
            WHERE signature = $1"#, payload.signature
     )
@@ -47,16 +47,6 @@ pub async fn login(
         Some(u) => u,
         _ => return (StatusCode::UNAUTHORIZED, "Signature invalide").into_response(),
     };
-
-    // Récupérer le rôle de l'utilisateur
-    let role = sqlx::query_scalar!(
-        r#"SELECT role FROM roles WHERE signature = $1"#,
-        user.signature
-    )
-    .fetch_optional(&pool)
-    .await
-    .unwrap()
-    .unwrap_or_else(|| "user".to_string());
 
     // Générer un token de session
     let token = Uuid::new_v4();
@@ -88,7 +78,7 @@ pub async fn login(
         id: user.id,
         signature: user.signature,
         name: user.name,
-        role,
+        role: user.role,
         created_at: user.created_at,
     };
 
@@ -138,7 +128,7 @@ where
         // Vérifier la session
         let user = sqlx::query_as!(
             User,
-            r#"SELECT u.id, u.signature, u.name, u.created_at
+            r#"SELECT u.id, u.signature, u.name, u.role, u.created_at
                FROM sessions s JOIN users u ON u.id = s.user_id
                WHERE s.token = $1 AND s.expires_at > NOW()"#, token
         )
@@ -147,21 +137,11 @@ where
         .map_err(|_| (StatusCode::UNAUTHORIZED, "Session invalide"))?;
 
         if let Some(u) = user {
-            // Récupérer le rôle
-            let role = sqlx::query_scalar!(
-                r#"SELECT role FROM roles WHERE signature = $1"#,
-                u.signature
-            )
-            .fetch_optional(&pool)
-            .await
-            .unwrap()
-            .unwrap_or_else(|| "user".to_string());
-
             Ok(AuthUser(SessionUser {
                 id: u.id,
                 signature: u.signature,
                 name: u.name,
-                role,
+                role: u.role,
                 created_at: u.created_at,
             }))
         } else {

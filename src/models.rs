@@ -9,6 +9,7 @@ pub struct User {
     pub id: Uuid,
     pub signature: String,
     pub name: Option<String>,
+    pub role: String,
     pub created_at: NaiveDateTime,
 }
 
@@ -75,6 +76,7 @@ pub struct UserWithRole {
 pub struct CreateUserRequest {
     pub signature: String,
     pub name: String,
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
