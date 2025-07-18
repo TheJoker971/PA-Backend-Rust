@@ -1,165 +1,402 @@
+// routes.rs
+
 use axum::{
-    extract::State,
-    routing::{get, post},
-    Json, Router,
+    extract::{State, Path},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
 };
-use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
+use chrono::Utc;
 
-use crate::models::{User, Property, Investment};
+use crate::auth::AuthUser;
+use crate::models::{Property, Investment, CreatePropertyRequest, CreateInvestmentRequest, ValidatePropertyRequest};
 
-// === Health Check ===
-#[derive(Serialize)]
-struct HealthResponse {
-    status: String,
+// Route de santé
+pub async fn health_check() -> impl IntoResponse {
+    StatusCode::OK
 }
 
-async fn health_check() -> Json<HealthResponse> {
-    Json(HealthResponse {
-        status: "ok".to_string(),
-    })
-}
-
-// === Users ===
-#[derive(Deserialize)]
-struct NewUser {
-    wallet: String,
-    email: Option<String>,
-    name: Option<String>,
-    role: Option<String>,
-}
-
-async fn create_user(
+// Routes pour les propriétés
+pub async fn create_property(
+    AuthUser(user): AuthUser,
     State(pool): State<PgPool>,
-    Json(payload): Json<NewUser>,
-) -> Json<String> {
-    let id = Uuid::new_v4();
-    let role = payload.role.unwrap_or_else(|| "user".to_string());
-
-    sqlx::query!(
-        r#"
-        INSERT INTO users (id, wallet, email, name, role)
-        VALUES ($1, $2, $3, $4, $5)
-        "#,
-        id,
-        payload.wallet,
-        payload.email,
-        payload.name,
-        role
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    Json(format!("User {} created", id))
-}
-
-async fn get_users(State(pool): State<PgPool>) -> Json<Vec<User>> {
-    let users = sqlx::query_as::<_, User>("SELECT * FROM users")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-    Json(users)
-}
-
-// === Properties ===
-#[derive(Deserialize)]
-struct NewProperty {
-    onchain_id: i32,
-    name: String,
-    description: Option<String>,
-    image_url: Option<String>,
-    category: Option<String>,
-    created_by: Option<Uuid>,
-}
-
-async fn create_property(
-    State(pool): State<PgPool>,
-    Json(payload): Json<NewProperty>,
-) -> Json<String> {
-    let id = Uuid::new_v4();
-
-    sqlx::query!(
-        r#"
-        INSERT INTO properties (id, onchain_id, name, description, image_url, category, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        "#,
-        id,
+    Json(payload): Json<CreatePropertyRequest>,
+) -> impl IntoResponse {
+    // Vérification du rôle déjà faite par le middleware
+    
+    // Création de la propriété
+    let result = sqlx::query!(
+        r#"INSERT INTO properties 
+        (onchain_id, name, location, type, description, total_price, token_price, annual_yield, image_url, documents, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id"#,
         payload.onchain_id,
         payload.name,
+        payload.location,
+        payload.property_type,
         payload.description,
+        payload.total_price,
+        payload.token_price,
+        payload.annual_yield,
         payload.image_url,
-        payload.category,
-        payload.created_by
+        payload.documents,
+        user.id
     )
-    .execute(&pool)
-    .await
-    .unwrap();
+    .fetch_one(&pool)
+    .await;
 
-    Json(format!("Property {} created", id))
+    match result {
+        Ok(record) => (StatusCode::CREATED, Json(serde_json::json!({ "id": record.id }))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
 }
 
-async fn get_properties(State(pool): State<PgPool>) -> Json<Vec<Property>> {
-    let properties = sqlx::query_as::<_, Property>("SELECT * FROM properties")
-        .fetch_all(&pool)
-        .await
-        .unwrap();
-    Json(properties)
-}
-
-// === Investments ===
-#[derive(Deserialize)]
-struct NewInvestment {
-    user_id: Uuid,
-    property_id: Uuid,
-    amount_eth: f64,
-    shares: i32,
-    tx_hash: String,
-}
-
-async fn create_investment(
+pub async fn get_properties(
     State(pool): State<PgPool>,
-    Json(payload): Json<NewInvestment>,
-) -> Json<String> {
-    let id = Uuid::new_v4();
-
-    sqlx::query!(
-        r#"
-        INSERT INTO investments (id, user_id, property_id, amount_eth, shares, tx_hash)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        "#,
-        id,
-        payload.user_id,
-        payload.property_id,
-        payload.amount_eth,
-        payload.shares,
-        payload.tx_hash
+) -> impl IntoResponse {
+    // Récupérer toutes les propriétés validées
+    match sqlx::query_as!(
+        Property,
+        r#"SELECT 
+            id, 
+            onchain_id, 
+            name, 
+            location, 
+            type as "property_type: String", 
+            description, 
+            total_price, 
+            token_price, 
+            annual_yield, 
+            image_url, 
+            documents, 
+            created_by, 
+            created_at,
+            is_validated,
+            validated_at,
+            validated_by
+        FROM properties 
+        WHERE is_validated = true
+        ORDER BY created_at DESC"#
     )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    Json(format!("Investment {} created", id))
+    .fetch_all(&pool)
+    .await {
+        Ok(properties) => (StatusCode::OK, Json(properties)),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
 }
 
-async fn get_investments(State(pool): State<PgPool>) -> Json<Vec<Investment>> {
-    let investments = sqlx::query_as::<_, Investment>("SELECT * FROM investments")
+pub async fn get_all_properties(
+    AuthUser(user): AuthUser,
+    State(pool): State<PgPool>,
+) -> impl IntoResponse {
+    // Vérification du rôle déjà faite par le middleware
+    
+    // Récupérer toutes les propriétés (validées et non validées)
+    match sqlx::query_as!(
+        Property,
+        r#"SELECT 
+            id, 
+            onchain_id, 
+            name, 
+            location, 
+            type as "property_type: String", 
+            description, 
+            total_price, 
+            token_price, 
+            annual_yield, 
+            image_url, 
+            documents, 
+            created_by, 
+            created_at,
+            is_validated,
+            validated_at,
+            validated_by
+        FROM properties 
+        ORDER BY created_at DESC"#
+    )
+    .fetch_all(&pool)
+    .await {
+        Ok(properties) => (StatusCode::OK, Json(properties)),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+pub async fn get_property(
+    State(pool): State<PgPool>,
+    Path(property_id): Path<Uuid>,
+) -> impl IntoResponse {
+    // Récupérer une propriété par son ID (uniquement si validée)
+    match sqlx::query_as!(
+        Property,
+        r#"SELECT 
+            id, 
+            onchain_id, 
+            name, 
+            location, 
+            type as "property_type: String", 
+            description, 
+            total_price, 
+            token_price, 
+            annual_yield, 
+            image_url, 
+            documents, 
+            created_by, 
+            created_at,
+            is_validated,
+            validated_at,
+            validated_by
+        FROM properties 
+        WHERE id = $1 AND is_validated = true"#,
+        property_id
+    )
+    .fetch_optional(&pool)
+    .await {
+        Ok(Some(property)) => (StatusCode::OK, Json(property)),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Propriété non trouvée" }))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+pub async fn get_property_admin(
+    AuthUser(user): AuthUser,
+    State(pool): State<PgPool>,
+    Path(property_id): Path<Uuid>,
+) -> impl IntoResponse {
+    // Récupérer une propriété par son ID (validée ou non)
+    match sqlx::query_as!(
+        Property,
+        r#"SELECT 
+            id, 
+            onchain_id, 
+            name, 
+            location, 
+            type as "property_type: String", 
+            description, 
+            total_price, 
+            token_price, 
+            annual_yield, 
+            image_url, 
+            documents, 
+            created_by, 
+            created_at,
+            is_validated,
+            validated_at,
+            validated_by
+        FROM properties 
+        WHERE id = $1"#,
+        property_id
+    )
+    .fetch_optional(&pool)
+    .await {
+        Ok(Some(property)) => (StatusCode::OK, Json(property)),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Propriété non trouvée" }))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+pub async fn validate_property(
+    AuthUser(user): AuthUser,
+    State(pool): State<PgPool>,
+    Path(property_id): Path<Uuid>,
+    Json(payload): Json<ValidatePropertyRequest>,
+) -> impl IntoResponse {
+    // Vérification du rôle déjà faite par le middleware (admin uniquement)
+    
+    // Mettre à jour le statut de validation de la propriété
+    let now = Utc::now().naive_utc();
+    let result = sqlx::query!(
+        r#"UPDATE properties 
+        SET is_validated = $1, validated_at = $2, validated_by = $3
+        WHERE id = $4
+        RETURNING id"#,
+        payload.is_validated,
+        now,
+        user.id,
+        property_id
+    )
+    .fetch_optional(&pool)
+    .await;
+
+    match result {
+        Ok(Some(_)) => (StatusCode::OK, Json(serde_json::json!({ 
+            "message": if payload.is_validated { "Propriété validée avec succès" } else { "Propriété invalidée avec succès" }
+        }))),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Propriété non trouvée" }))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+// Routes pour les investissements
+pub async fn create_investment(
+    AuthUser(user): AuthUser,
+    State(pool): State<PgPool>,
+    Json(payload): Json<CreateInvestmentRequest>,
+) -> impl IntoResponse {
+    // Vérifier que la propriété est validée
+    let property = sqlx::query!(
+        r#"SELECT is_validated FROM properties WHERE id = $1"#,
+        payload.property_id
+    )
+    .fetch_optional(&pool)
+    .await;
+
+    match property {
+        Ok(Some(prop)) if prop.is_validated => {
+            // La propriété existe et est validée, on peut créer l'investissement
+            let result = sqlx::query!(
+                r#"INSERT INTO investments 
+                (user_id, property_id, amount_eth, shares, tx_hash)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING id"#,
+                user.id,
+                payload.property_id,
+                payload.amount_eth,
+                payload.shares,
+                payload.tx_hash
+            )
+            .fetch_one(&pool)
+            .await;
+
+            match result {
+                Ok(record) => (StatusCode::CREATED, Json(serde_json::json!({ "id": record.id }))),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+            }
+        },
+        Ok(Some(_)) => (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "Cette propriété n'est pas encore validée" }))),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Propriété non trouvée" }))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+pub async fn get_investments(
+    AuthUser(user): AuthUser,
+    State(pool): State<PgPool>,
+) -> impl IntoResponse {
+    // Les admins et managers peuvent voir tous les investissements
+    let investments = if user.role == "admin" || user.role == "manager" {
+        sqlx::query_as!(
+            Investment,
+            r#"SELECT id, user_id, property_id, amount_eth, shares, tx_hash, created_at 
+            FROM investments 
+            ORDER BY created_at DESC"#
+        )
         .fetch_all(&pool)
         .await
-        .unwrap();
-    Json(investments)
+    } else {
+        // Les utilisateurs normaux ne voient que leurs propres investissements
+        sqlx::query_as!(
+            Investment,
+            r#"SELECT id, user_id, property_id, amount_eth, shares, tx_hash, created_at 
+            FROM investments 
+            WHERE user_id = $1
+            ORDER BY created_at DESC"#,
+            user.id
+        )
+        .fetch_all(&pool)
+        .await
+    };
+
+    match investments {
+        Ok(investments) => (StatusCode::OK, Json(investments)),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
 }
 
-// === Router ===
-pub fn create_router(pool: PgPool) -> Router {
-    Router::new()
-        .route("/health", get(health_check))
-        .route("/users", post(create_user))
-        .route("/users", get(get_users))
-        .route("/properties", post(create_property))
-        .route("/properties", get(get_properties))
-        .route("/investments", post(create_investment))
-        .route("/investments", get(get_investments))
-        .with_state(pool)
+pub async fn get_user_investments(
+    AuthUser(user): AuthUser,
+    State(pool): State<PgPool>,
+    Path(user_id): Path<Uuid>,
+) -> impl IntoResponse {
+    // Vérifier que l'utilisateur est admin/manager ou qu'il consulte ses propres investissements
+    if user.role != "admin" && user.role != "manager" && user.id != user_id {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "Accès refusé" }))).into_response();
+    }
+
+    // Récupérer les investissements de l'utilisateur
+    match sqlx::query_as!(
+        Investment,
+        r#"SELECT id, user_id, property_id, amount_eth, shares, tx_hash, created_at 
+        FROM investments 
+        WHERE user_id = $1
+        ORDER BY created_at DESC"#,
+        user_id
+    )
+    .fetch_all(&pool)
+    .await {
+        Ok(investments) => (StatusCode::OK, Json(investments)),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+// Route pour créer un utilisateur
+pub async fn create_user(
+    State(pool): State<PgPool>,
+    Json(payload): Json<crate::models::CreateUserRequest>,
+) -> impl IntoResponse {
+    // Créer l'utilisateur
+    let result = sqlx::query!(
+        r#"INSERT INTO users (signature, name)
+        VALUES ($1, $2)
+        RETURNING id"#,
+        payload.signature,
+        payload.name
+    )
+    .fetch_one(&pool)
+    .await;
+
+    match result {
+        Ok(record) => (StatusCode::CREATED, Json(serde_json::json!({ "id": record.id }))),
+        Err(e) => {
+            if e.to_string().contains("duplicate key") {
+                (StatusCode::CONFLICT, Json(serde_json::json!({ "error": "Utilisateur déjà existant" })))
+            } else {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() })))
+            }
+        }
+    }
+}
+
+// Route pour récupérer les utilisateurs
+pub async fn get_users(
+    AuthUser(user): AuthUser,
+    State(pool): State<PgPool>,
+) -> impl IntoResponse {
+    // Seuls les admins et managers peuvent voir tous les utilisateurs
+    if user.role != "admin" && user.role != "manager" {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "Accès refusé" }))).into_response();
+    }
+
+    // Récupérer tous les utilisateurs avec leurs rôles
+    match sqlx::query!(
+        r#"SELECT 
+            u.id, 
+            u.wallet, 
+            u.email, 
+            u.name, 
+            u.created_at,
+            COALESCE(r.role, 'user') as role
+        FROM users u
+        LEFT JOIN roles r ON u.wallet_short = r.wallet_short
+        ORDER BY u.created_at DESC"#
+    )
+    .fetch_all(&pool)
+    .await {
+        Ok(rows) => {
+            let users = rows.into_iter().map(|row| {
+                serde_json::json!({
+                    "id": row.id,
+                    "wallet": row.wallet,
+                    "email": row.email,
+                    "name": row.name,
+                    "role": row.role,
+                    "created_at": row.created_at
+                })
+            }).collect::<Vec<_>>();
+            
+            (StatusCode::OK, Json(users))
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": e.to_string() }))),
+    }
 }

@@ -1,143 +1,104 @@
-# 🧱 Real Estate Web3 API
+# API Backend Rust avec Supabase
 
-API REST en Rust (Axum + SQLx) pour gérer une plateforme Web3 de gestion d'utilisateurs, propriétés immobilières tokenisées et investissements liés à la blockchain.
+Cette API est construite avec Rust (Axum) et utilise Supabase comme base de données PostgreSQL.
 
----
+## Fonctionnalités
 
-## 🚀 Technologies
+- Système de gestion des rôles basé sur les adresses de wallet
+- Gestion des propriétés immobilières avec validation par les administrateurs
+- Gestion des investissements
+- Authentification sécurisée
 
-- [Rust](https://www.rust-lang.org/)
-- [Axum](https://docs.rs/axum/latest/axum/)
-- [Tokio](https://tokio.rs/)
-- [SQLx](https://docs.rs/sqlx/)
-- [PostgreSQL (Neon)](https://neon.tech/)
-- [dotenvy](https://docs.rs/dotenvy)
-- [uuid](https://docs.rs/uuid)
-- [chrono](https://docs.rs/chrono)
+## Configuration de Supabase
 
----
+1. Créez un compte sur [Supabase](https://supabase.com/) si ce n'est pas déjà fait
+2. Créez un nouveau projet
+3. Notez les informations de connexion à la base de données dans la section "Settings > Database"
 
-## 📁 Structure
+## Migration de la base de données
 
-.
-├── src/
-│ ├── main.rs # Démarrage serveur + DB init
-│ ├── db.rs # Connexion à la DB PostgreSQL
-│ ├── routes.rs # Définition des routes API
-│ └── models.rs # Structs de données (User, Property, Investment)
-├── migrations/
-│ └── schema.sql # Script SQL de création des tables
-├── .env # Variables d'environnement (DB, port)
-├── Cargo.toml # Dépendances Rust
-└── README.md # Ce fichier
+1. Accédez à l'interface SQL de Supabase (Table Editor > SQL)
+2. Copiez le contenu du fichier `migrations/supabase_migration.sql`
+3. Collez-le dans l'éditeur SQL de Supabase et exécutez-le
+4. Modifiez les valeurs par défaut pour l'utilisateur administrateur dans le script
 
+## Configuration de l'environnement
 
----
+1. Créez un fichier `.env` à la racine du projet en vous basant sur `.env.example`
+2. Remplissez la variable `DATABASE_URL` avec l'URL de connexion à votre base de données Supabase
 
-## ⚙️ Variables d'environnement `.env`
-
-```env
-DATABASE_URL=postgres://<user>:<pass>@<host>/<dbname>?sslmode=require
+```
+DATABASE_URL=postgres://postgres:your-password-here@db.xxxxxxxxxxxx.supabase.co:5432/postgres
 PORT=3000
 ```
 
+## Exécution de l'application
 
-# Installer les dépendances Rust (si ce n'est pas fait)
-rustup update
-cargo install sqlx-cli
-
-# Lancer le serveur
 ```bash
+# Installation des dépendances
+cargo build
+
+# Lancement du serveur
 cargo run
 ```
 
+Le serveur sera accessible à l'adresse `http://localhost:3000`.
 
-# 🏗️ Installation
-```bash
-# Installer les dépendances Rust (si ce n'est pas fait)
-rustup update
-cargo install sqlx-cli
+## Structure du projet
 
-# Lancer le serveur
-cargo run
-```
+- `src/main.rs` : Point d'entrée de l'application
+- `src/db.rs` : Configuration de la connexion à la base de données
+- `src/models.rs` : Modèles de données
+- `src/routes.rs` : Définition des routes de l'API
+- `src/auth.rs` : Gestion de l'authentification et des rôles
 
-# 🔧 Initialiser la base de données
-Les tables sont créées automatiquement au démarrage (via le fichier migrations/schema.sql), ou vous pouvez les exécuter manuellement :
+## API Endpoints
 
-```bash
-psql "$DATABASE_URL" -f migrations/schema.sql
-```
+### Authentification
 
-# 📚 Routes API
-## ✅ Health Check
+- `POST /auth/login` : Connexion avec email/mot de passe
+- `POST /auth/logout` : Déconnexion
 
-```http
-GET /health
-```
+### Utilisateurs
 
-## 👤 Utilisateurs
-```http
-POST /users
-GET  /users
-```
+- `POST /users` : Création d'un utilisateur
+- `GET /users` : Liste des utilisateurs (admin/manager uniquement)
 
-### Body JSON POST :
+### Rôles
 
-```json
+- `POST /roles` : Création d'un rôle (admin uniquement)
+- `GET /roles` : Liste des rôles (admin uniquement)
+- `DELETE /roles/:role_id` : Suppression d'un rôle (admin uniquement)
+- `GET /roles/wallet/:wallet` : Récupération du rôle d'un wallet
 
-{
-  "wallet": "0xabc123...",
-  "email": "bob@example.com",
-  "name": "Bob",
-  "role": "user"
-}
-```
+### Propriétés
 
-## 🏘️ Propriétés
-```http
-POST /properties
-GET  /properties
-```
+- `GET /properties` : Liste des propriétés validées (public)
+- `GET /properties/:property_id` : Détails d'une propriété validée (public)
+- `GET /properties/all` : Liste de toutes les propriétés (admin/manager uniquement)
+- `GET /properties/admin/:property_id` : Détails d'une propriété (admin/manager uniquement)
+- `POST /properties` : Création d'une propriété (admin/manager uniquement)
+- `PUT /properties/:property_id/validate` : Validation d'une propriété (admin uniquement)
 
-### Body JSON POST :
+### Investissements
 
-```json
-{
-  "onchain_id": 1,
-  "name": "Villa Sunset",
-  "description": "Maison tokenisée dans le sud",
-  "image_url": "https://ipfs.io/ipfs/...",
-  "category": "villa",
-  "created_by": "uuid-user"
-}
-```
+- `POST /investments` : Création d'un investissement (uniquement pour les propriétés validées)
+- `GET /investments` : Liste des investissements de l'utilisateur connecté
+- `GET /investments/user/:user_id` : Liste des investissements d'un utilisateur spécifique
 
-## 💸 Investissements
-```http
-POST /investments
-GET  /investments
-```
+## Gestion des rôles
 
-### Body JSON POST :
+Le système utilise les 8 premiers caractères de l'adresse du wallet pour associer un rôle à un utilisateur. Les rôles disponibles sont :
 
-```json
-{
-  "user_id": "uuid-user",
-  "property_id": "uuid-property",
-  "amount_eth": 1.5,
-  "shares": 10,
-  "tx_hash": "0xhash"
-}
-```
+- `admin` : Accès complet à toutes les fonctionnalités
+- `manager` : Peut créer et gérer des propriétés, mais ne peut pas valider
+- `investor` : Peut investir dans des propriétés validées
+- `user` : Accès limité (par défaut)
 
-## 📄 Licence
+## Sécurité
 
-Ce projet est distribué sous la licence **GNU Affero General Public License v3.0 (AGPL-3.0)**.
-
-Cela signifie que :
-- Vous êtes libre d’utiliser, modifier et redistribuer ce projet.
-- Toute modification ou utilisation sur un serveur (même sans distribution) doit également être rendue accessible sous la même licence.
-- Le code source modifié doit être publié si vous fournissez ce service publiquement.
-
-👉 [Consulter la licence complète](https://www.gnu.org/licenses/agpl-3.0.html)
+L'API utilise :
+- Cookies sécurisés pour les sessions
+- Protection CSRF
+- Row Level Security (RLS) dans Supabase
+- Hachage des mots de passe avec bcrypt

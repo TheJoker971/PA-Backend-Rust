@@ -1,4 +1,5 @@
--- migrations/schema.sql
+-- Script de migration pour Supabase
+-- À exécuter dans l'interface SQL de Supabase ou via l'API
 
 -- Extension pour UUID
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -13,60 +14,64 @@ DROP TABLE IF EXISTS properties CASCADE;
 DROP TABLE IF EXISTS roles CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 
--- Création de la table users
-CREATE TABLE IF NOT EXISTS users (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    signature TEXT NOT NULL UNIQUE,
+-- Table users (avec hash de mot de passe)
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    wallet TEXT NOT NULL UNIQUE,
+    wallet_short TEXT GENERATED ALWAYS AS (substring(wallet, 1, 8)) STORED,
+    email TEXT UNIQUE,
     name TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Création de la table roles
-CREATE TABLE IF NOT EXISTS roles (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    signature TEXT NOT NULL UNIQUE,
-    role TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-- Table roles (nouvelle table pour la gestion des rôles)
+CREATE TABLE roles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    wallet_short TEXT NOT NULL UNIQUE,
+    role TEXT CHECK (role IN ('admin', 'manager', 'investor', 'user')) NOT NULL DEFAULT 'user',
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Création de la table sessions
-CREATE TABLE IF NOT EXISTS sessions (
+-- Table properties
+CREATE TABLE properties (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    onchain_id INT NOT NULL,
+    name TEXT NOT NULL,
+    location TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (type IN ('Residential', 'Commercial', 'Industrial')),
+    description TEXT,
+    total_price DECIMAL,
+    token_price DECIMAL,
+    annual_yield DECIMAL,
+    image_url TEXT,
+    documents JSONB, -- Liste de URLs de documents
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    is_validated BOOLEAN NOT NULL DEFAULT FALSE,
+    validated_at TIMESTAMP,
+    validated_by UUID REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Table investments
+CREATE TABLE investments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+    property_id UUID REFERENCES properties(id) ON DELETE CASCADE,
+    amount_eth DOUBLE PRECISION NOT NULL,
+    shares INT NOT NULL,
+    tx_hash TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Table sessions
+CREATE TABLE sessions (
     token UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     expires_at TIMESTAMPTZ NOT NULL
 );
-
--- Création de la table properties
-CREATE TABLE IF NOT EXISTS properties (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    onchain_id TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    location TEXT NOT NULL,
-    type TEXT NOT NULL,
-    description TEXT,
-    total_price NUMERIC NOT NULL,
-    token_price NUMERIC NOT NULL,
-    annual_yield NUMERIC NOT NULL,
-    image_url TEXT,
-    documents TEXT[],
-    created_by UUID NOT NULL REFERENCES users(id),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    is_validated BOOLEAN NOT NULL DEFAULT FALSE,
-    validated_at TIMESTAMPTZ,
-    validated_by UUID REFERENCES users(id)
-);
-
--- Création de la table investments
-CREATE TABLE IF NOT EXISTS investments (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(id),
-    property_id UUID NOT NULL REFERENCES properties(id),
-    amount_eth NUMERIC NOT NULL,
-    shares INTEGER NOT NULL,
-    tx_hash TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE INDEX idx_sessions_user_id ON sessions(user_id);
 
 -- Trigger pour mettre à jour le champ updated_at dans la table roles
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -89,7 +94,7 @@ DECLARE
     user_role TEXT;
 BEGIN
     SELECT role INTO user_role FROM roles
-    WHERE signature = wallet_address;
+    WHERE wallet_short = substring(wallet_address, 1, 8);
     
     RETURN COALESCE(user_role, 'user');
 END;
@@ -110,28 +115,28 @@ CREATE POLICY "Admin et manager peuvent voir toutes les propriétés"
     ON properties FOR SELECT 
     TO authenticated
     USING (
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Seuls admin et manager peuvent créer des propriétés" 
     ON properties FOR INSERT 
     TO authenticated
     WITH CHECK (
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Seuls admin et manager peuvent modifier des propriétés" 
     ON properties FOR UPDATE 
     TO authenticated
     USING (
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Seuls admin peuvent supprimer des propriétés" 
     ON properties FOR DELETE 
     TO authenticated
     USING (
-        get_user_role(auth.jwt()->>'signature') = 'admin'
+        get_user_role(auth.jwt()->>'wallet') = 'admin'
     );
 
 -- Politiques RLS pour investments
@@ -140,7 +145,7 @@ CREATE POLICY "Utilisateurs peuvent voir leurs propres investissements"
     TO authenticated
     USING (
         user_id = auth.uid() OR
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Utilisateurs peuvent créer leurs propres investissements" 
@@ -155,7 +160,7 @@ CREATE POLICY "Seuls admin peuvent gérer les rôles"
     ON roles FOR ALL 
     TO authenticated
     USING (
-        get_user_role(auth.jwt()->>'signature') = 'admin'
+        get_user_role(auth.jwt()->>'wallet') = 'admin'
     );
 
 -- Politiques RLS pour users
@@ -164,7 +169,7 @@ CREATE POLICY "Utilisateurs peuvent voir leur propre profil"
     TO authenticated
     USING (
         id = auth.uid() OR
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Utilisateurs peuvent modifier leur propre profil" 
@@ -172,5 +177,13 @@ CREATE POLICY "Utilisateurs peuvent modifier leur propre profil"
     TO authenticated
     USING (
         id = auth.uid() OR
-        get_user_role(auth.jwt()->>'signature') = 'admin'
+        get_user_role(auth.jwt()->>'wallet') = 'admin'
     );
+
+-- Création d'un utilisateur administrateur par défaut (à modifier avec vos propres valeurs)
+INSERT INTO users (wallet, email, name, password_hash) 
+VALUES ('0xAdminWalletAddress', 'admin@example.com', 'Admin', crypt('admin_password', gen_salt('bf')));
+
+-- Attribuer le rôle admin à cet utilisateur
+INSERT INTO roles (wallet_short, role)
+VALUES (substring('0xAdminWalletAddress', 1, 8), 'admin'); 

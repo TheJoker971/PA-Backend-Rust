@@ -6,12 +6,17 @@ edition = "2021"
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 axum = "0.7"
+axum-extra = { version = "0.4", features = ["cookies", "cookie_store"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dotenvy = "0.15"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "macros", "uuid", "chrono"] }
+sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-rustls", "macros", "uuid", "chrono", "json"] }
 tower-http = { version = "0.5", features = ["trace"] }
+bcrypt = "0.10"
+tower-csrf = "0.1"
 
-
+[[bin]]
+name = "migrate_to_supabase"
+path = "scripts/migrate_to_supabase.rs"
