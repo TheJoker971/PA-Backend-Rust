@@ -7,7 +7,8 @@ use axum::{
 };
 use dotenvy::dotenv;
 use std::{env, net::SocketAddr};
-use tower_http::trace::TraceLayer;
+use tower_http::{trace::TraceLayer, cors::{CorsLayer, Any}};
+use http::{HeaderValue, HeaderName, Method};
 use sqlx::PgPool;
 
 mod db;
@@ -28,17 +29,46 @@ async fn main() {
 
     println!("✅ Connexion à la base de données établie");
 
+    // Configuration CORS
+    let cors = CorsLayer::new()
+        .allow_origin("http://localhost:5173".parse::<HeaderValue>().unwrap())
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            "content-type".parse::<HeaderName>().unwrap(),
+            "authorization".parse::<HeaderName>().unwrap(),
+            "accept".parse::<HeaderName>().unwrap(),
+            "origin".parse::<HeaderName>().unwrap(),
+            "x-requested-with".parse::<HeaderName>().unwrap(),
+        ])
+        .allow_credentials(true);
+
     // Configuration des routes avec authentification Bearer Token
     let app = Router::new()
         // Auth - routes de connexion/déconnexion (conservées pour compatibilité)
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        .route("/api/auth/connect", post(auth::login)) // Route pour le frontend
         
         // Health check (publique)
         .route("/health", get(routes::health_check))
         
         // Routes utilisateurs
         .route("/users", post(routes::create_user))
+        .route("/api/users/with-permissions", get(routes::get_users_with_permissions))
+        
+        // Routes pour la gestion des rôles
+        .route("/api/roles/assign", post(routes::assign_role))
+        
+        // Routes pour les distributions (simulées)
+        .route("/api/distributions", get(routes::get_distributions))
+        .route("/api/distributions/stats", get(routes::get_distribution_stats))
+        .route("/api/distributions", post(routes::create_distribution))
         
         // Routes properties avec authentification Bearer Token
         // Routes publiques (anciennes pour compatibilité)
@@ -70,6 +100,7 @@ async fn main() {
         )
         
         // Layers
+        .layer(cors)
         .layer(TraceLayer::new_for_http())
         .with_state(pool.clone());
 

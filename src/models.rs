@@ -39,7 +39,7 @@ pub struct User {
     pub id: Uuid,
     pub signature: String,
     pub name: Option<String>,
-    pub role: String,
+    pub role: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -58,7 +58,7 @@ pub struct Property {
     pub documents: Option<Vec<String>>,
     pub created_by: Uuid,         // NOT NULL dans la DB
     pub created_at: DateTime<Utc>,
-    pub status: PropertyStatus,
+    pub status: Option<PropertyStatus>,
     pub status_updated_at: Option<DateTime<Utc>>,
     pub status_updated_by: Option<Uuid>,
 }

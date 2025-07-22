@@ -14,12 +14,13 @@ sqlx = { version = "0.6", features = ["runtime-tokio-rustls", "postgres", "uuid"
 bigdecimal = { version = "0.3", features = ["serde"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 chrono = { version = "0.4", features = ["serde"] }
-tower-http = { version = "0.4", features = ["trace"] }
+tower-http = { version = "0.4", features = ["trace", "cors"] }
 bcrypt = "0.14"
 dotenvy = "0.15"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 tower = "0.4"
+http = "0.2"
 
 [[bin]]
 name = "migrate_to_supabase"

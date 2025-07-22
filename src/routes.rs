@@ -283,7 +283,7 @@ pub async fn update_property(
     };
 
     // Empêcher la modification si la property est validée (sauf pour l'admin)
-    if matches!(existing_property.status, PropertyStatus::Validated) && user.role != "admin" {
+    if matches!(existing_property.status, Some(PropertyStatus::Validated)) && user.role != "admin" {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Impossible de modifier une propriété validée par l'admin"
         }))).into_response();
@@ -424,7 +424,7 @@ pub async fn delete_property(
     };
 
     // Empêcher la suppression si la property est validée
-    if matches!(existing_property.status, PropertyStatus::Validated) {
+    if matches!(existing_property.status, Some(PropertyStatus::Validated)) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Impossible de supprimer une propriété validée"
         }))).into_response();
@@ -531,7 +531,7 @@ pub async fn create_investment(
     };
 
     // Seules les propriétés validées peuvent recevoir des investissements
-    if !matches!(property_status, PropertyStatus::Validated) {
+    if !matches!(property_status, Some(PropertyStatus::Validated)) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Impossible d'investir dans une propriété non validée"
         }))).into_response();
@@ -704,4 +704,183 @@ pub async fn delete_investment(
             "error": format!("Erreur lors de la suppression: {}", e.to_string())
         }))).into_response(),
     }
+}
+
+/// Route pour récupérer tous les utilisateurs avec leurs permissions (admin uniquement)
+pub async fn get_users_with_permissions(
+    BearerAuthUser(user): BearerAuthUser,
+    State(pool): State<PgPool>,
+) -> impl IntoResponse {
+    // Vérifier que l'utilisateur est admin
+    if user.role != "admin" {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ 
+            "error": "Accès refusé. Rôle admin requis."
+        }))).into_response();
+    }
+
+    match sqlx::query!(
+        r#"SELECT id, signature, name, role, created_at
+           FROM users 
+           ORDER BY created_at DESC"#
+    )
+    .fetch_all(&pool)
+    .await {
+        Ok(rows) => {
+            let users: Vec<serde_json::Value> = rows.into_iter().map(|row| {
+                serde_json::json!({
+                    "id": row.id,
+                    "signature": row.signature,
+                    "name": row.name,
+                    "role": row.role.unwrap_or_else(|| "user".to_string()),
+                    "created_at": row.created_at
+                })
+            }).collect();
+            
+            (StatusCode::OK, Json(serde_json::json!({
+                "users": users,
+                "count": users.len()
+            }))).into_response()
+        },
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ 
+            "error": format!("Erreur lors de la récupération: {}", e.to_string())
+        }))).into_response(),
+    }
+}
+
+/// Route pour attribuer un rôle à un utilisateur (admin uniquement)
+pub async fn assign_role(
+    BearerAuthUser(user): BearerAuthUser,
+    State(pool): State<PgPool>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    // Vérifier que l'utilisateur est admin
+    if user.role != "admin" {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ 
+            "error": "Accès refusé. Rôle admin requis."
+        }))).into_response();
+    }
+
+    let user_signature = payload["user_signature"].as_str().unwrap_or("");
+    let role = payload["role"].as_str().unwrap_or("user");
+
+    if user_signature.is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ 
+            "error": "Signature utilisateur requise"
+        }))).into_response();
+    }
+
+    // Vérifier si l'utilisateur existe déjà
+    let existing_user = match sqlx::query!(
+        r#"SELECT id FROM users WHERE signature = $1"#,
+        user_signature
+    )
+    .fetch_optional(&pool)
+    .await {
+        Ok(user) => user,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ 
+            "error": format!("Erreur lors de la vérification: {}", e.to_string())
+        }))).into_response(),
+    };
+
+    match existing_user {
+        Some(_) => {
+            // Utilisateur existe, mettre à jour le rôle
+            match sqlx::query!(
+                r#"UPDATE users SET role = $1 WHERE signature = $2"#,
+                role,
+                user_signature
+            )
+            .execute(&pool)
+            .await {
+                Ok(_) => (StatusCode::OK, Json(serde_json::json!({ 
+                    "message": format!("Rôle '{}' mis à jour avec succès", role)
+                }))).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ 
+                    "error": format!("Erreur lors de la mise à jour: {}", e.to_string())
+                }))).into_response(),
+            }
+        },
+        None => {
+            // Utilisateur n'existe pas, le créer
+            match sqlx::query!(
+                r#"INSERT INTO users (signature, name, role)
+                   VALUES ($1, $2, $3)"#,
+                user_signature,
+                "Utilisateur Wallet", // Nom par défaut
+                role
+            )
+            .execute(&pool)
+            .await {
+                Ok(_) => (StatusCode::CREATED, Json(serde_json::json!({ 
+                    "message": format!("Utilisateur créé avec le rôle '{}'", role)
+                }))).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ 
+                    "error": format!("Erreur lors de la création: {}", e.to_string())
+                }))).into_response(),
+            }
+        }
+    }
+}
+
+/// Route pour récupérer l'historique des distributions (simulé)
+pub async fn get_distributions(
+    BearerAuthUser(_user): BearerAuthUser,
+    State(_pool): State<PgPool>,
+) -> impl IntoResponse {
+    // Simulation - retourner des données factices
+    let distributions = vec![
+        serde_json::json!({
+            "id": "1",
+            "property_id": "property-1",
+            "property_name": "Immeuble de luxe",
+            "amount": "0.5",
+            "period": "2024-01",
+            "distributed_at": "2024-01-15T10:00:00Z",
+            "transaction_hash": "0x1234567890abcdef"
+        }),
+        serde_json::json!({
+            "id": "2", 
+            "property_id": "property-2",
+            "property_name": "Résidence moderne",
+            "amount": "0.3",
+            "period": "2024-01",
+            "distributed_at": "2024-01-20T14:30:00Z",
+            "transaction_hash": "0xabcdef1234567890"
+        })
+    ];
+    
+    (StatusCode::OK, Json(serde_json::json!({
+        "distributions": distributions,
+        "count": distributions.len()
+    }))).into_response()
+}
+
+/// Route pour récupérer les statistiques des distributions (simulé)
+pub async fn get_distribution_stats(
+    BearerAuthUser(_user): BearerAuthUser,
+    State(_pool): State<PgPool>,
+) -> impl IntoResponse {
+    // Simulation - retourner des statistiques factices
+    (StatusCode::OK, Json(serde_json::json!({
+        "total_distributed": "2.5",
+        "this_quarter": "0.8",
+        "active_properties": 3,
+        "total_distributions": 5
+    }))).into_response()
+}
+
+/// Route pour créer une distribution (simulé)
+pub async fn create_distribution(
+    BearerAuthUser(_user): BearerAuthUser,
+    State(_pool): State<PgPool>,
+    Json(payload): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    // Simulation - retourner une confirmation
+    (StatusCode::CREATED, Json(serde_json::json!({
+        "id": "new-distribution-id",
+        "message": "Distribution créée avec succès (simulation)",
+        "property_id": payload["property_id"],
+        "amount": payload["amount"],
+        "period": payload["period"]
+    }))).into_response()
 }

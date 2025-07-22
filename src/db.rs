@@ -21,12 +21,14 @@ pub async fn init_db() -> PgPool {
 // Fonction utilitaire pour obtenir le rôle d'un utilisateur par signature
 pub async fn get_user_role(pool: &PgPool, signature: &str) -> String {
     // Récupérer le rôle directement depuis la table users
-    sqlx::query_scalar!(
+    match sqlx::query_scalar!(
         r#"SELECT role FROM users WHERE signature = $1"#,
         signature
     )
     .fetch_optional(pool)
-    .await
-    .unwrap_or(None)
-    .unwrap_or_else(|| "user".to_string())
+    .await {
+        Ok(Some(role)) => role.unwrap_or_else(|| "user".to_string()),
+        Ok(None) => "user".to_string(),
+        Err(_) => "user".to_string(),
+    }
 }
