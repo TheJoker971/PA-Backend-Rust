@@ -18,15 +18,12 @@ pub async fn init_db() -> PgPool {
         .expect("Failed to connect to Supabase database")
 }
 
-// Fonction utilitaire pour obtenir le rôle d'un wallet
-pub async fn get_wallet_role(pool: &PgPool, wallet: &str) -> String {
-    // Extraire les 8 premiers caractères du wallet
-    let wallet_short = wallet.chars().take(8).collect::<String>();
-    
-    // Récupérer le rôle
+// Fonction utilitaire pour obtenir le rôle d'un utilisateur par signature
+pub async fn get_user_role(pool: &PgPool, signature: &str) -> String {
+    // Récupérer le rôle directement depuis la table users
     sqlx::query_scalar!(
-        r#"SELECT role FROM roles WHERE wallet_short = $1"#,
-        wallet_short
+        r#"SELECT role FROM users WHERE signature = $1"#,
+        signature
     )
     .fetch_optional(pool)
     .await
