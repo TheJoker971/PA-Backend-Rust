@@ -5,8 +5,8 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use axum_extra::extract::cookie::{Cookie, CookieJar};
-use chrono::{Utc, Duration};
+use axum_extra::extract::cookie::CookieJar;
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -28,9 +28,14 @@ pub struct LoginRequest {
     pub signature: String,
 }
 
-/// Handler `POST /auth/login`
+/// Payload JSON pour l'authentification par bearer token
+#[derive(Debug, Deserialize)]
+pub struct BearerAuthRequest {
+    pub signature: String,
+}
+
+/// Handler `POST /auth/login` (simplifié sans sessions)
 pub async fn login(
-    jar: CookieJar,
     State(pool): State<PgPool>,
     Json(payload): Json<LoginRequest>,
 ) -> Response {
@@ -48,31 +53,6 @@ pub async fn login(
         _ => return (StatusCode::UNAUTHORIZED, "Signature invalide").into_response(),
     };
 
-    // Générer un token de session
-    let token = Uuid::new_v4();
-    let expires_at = Utc::now() + Duration::hours(24);
-
-    // Insérer en base
-    sqlx::query!(
-        "INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)",
-        token,
-        user.id,
-        expires_at
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    // Créer le cookie sécurisé
-    let cookie = Cookie::build("session_token", token.to_string())
-        .http_only(true)
-        .secure(true)
-        .same_site(axum_extra::extract::cookie::SameSite::Strict)
-        .path("/")
-        .finish();
-
-    let jar = jar.add(cookie);
-
     let session_user = SessionUser {
         id: user.id,
         signature: user.signature,
@@ -81,26 +61,15 @@ pub async fn login(
         created_at: user.created_at,
     };
 
-    (jar, (StatusCode::OK, Json(session_user))).into_response()
+    (StatusCode::OK, Json(session_user)).into_response()
 }
 
-/// Handler `POST /auth/logout`
-pub async fn logout(
-    jar: CookieJar,
-    State(pool): State<PgPool>,
-) -> impl IntoResponse {
-    if let Some(cookie) = jar.get("session_token") {
-        let token = Uuid::parse_str(cookie.value()).unwrap();
-        let _ = sqlx::query!("DELETE FROM sessions WHERE token = $1", token)
-            .execute(&pool)
-            .await;
-    }
-    // Supprimer le cookie côté client
-    let jar = jar.remove(Cookie::named("session_token"));
-    (jar, StatusCode::OK)
+/// Handler `POST /auth/logout` (simplifié)
+pub async fn logout() -> impl IntoResponse {
+    (StatusCode::OK, Json(serde_json::json!({"message": "Déconnecté avec succès"})))
 }
 
-/// Extracteur d'utilisateur authentifié
+/// Extracteur d'utilisateur authentifié (cookies - conservé pour compatibilité)
 pub struct AuthUser(pub SessionUser);
 
 #[axum::async_trait]
@@ -116,7 +85,38 @@ where
             .await
             .map_err(|_| (StatusCode::UNAUTHORIZED, "Cookies manquants"))?;
         let cookie = jar.get("session_token").ok_or((StatusCode::UNAUTHORIZED, "Non authentifié"))?;
-        let token = Uuid::parse_str(cookie.value()).map_err(|_| (StatusCode::UNAUTHORIZED, "Token invalide"))?;
+        let _token = Uuid::parse_str(cookie.value()).map_err(|_| (StatusCode::UNAUTHORIZED, "Token invalide"))?;
+
+        // Pour la compatibilité, retourner une erreur car on n'utilise plus les sessions
+        Err((StatusCode::UNAUTHORIZED, "Utiliser l'authentification Bearer Token"))
+    }
+}
+
+/// Extracteur d'utilisateur authentifié via Bearer Token
+pub struct BearerAuthUser(pub SessionUser);
+
+#[axum::async_trait]
+impl<S> FromRequestParts<S> for BearerAuthUser
+where
+    S: Send + Sync,
+{
+    type Rejection = (StatusCode, &'static str);
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        // Récupérer le header Authorization
+        let headers = &parts.headers;
+        let auth_header = headers
+            .get("Authorization")
+            .ok_or((StatusCode::UNAUTHORIZED, "Header Authorization manquant"))?
+            .to_str()
+            .map_err(|_| (StatusCode::UNAUTHORIZED, "Header Authorization invalide"))?;
+
+        // Vérifier que c'est un Bearer token
+        if !auth_header.starts_with("Bearer ") {
+            return Err((StatusCode::UNAUTHORIZED, "Token Bearer requis"));
+        }
+
+        let signature = auth_header.strip_prefix("Bearer ").unwrap().trim();
 
         // Récupérer le pool
         let pool = parts.extensions
@@ -124,19 +124,19 @@ where
             .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Pool manquant"))?
             .clone();
 
-        // Vérifier la session
+        // Récupérer l'utilisateur par signature
         let user = sqlx::query_as!(
             User,
-            r#"SELECT u.id, u.signature, u.name, u.role, u.created_at
-               FROM sessions s JOIN users u ON u.id = s.user_id
-               WHERE s.token = $1 AND s.expires_at > NOW()"#, token
+            r#"SELECT id, signature, name, role, created_at
+               FROM users
+               WHERE signature = $1"#, signature
         )
         .fetch_optional(&pool)
         .await
-        .map_err(|_| (StatusCode::UNAUTHORIZED, "Session invalide"))?;
+        .map_err(|_| (StatusCode::UNAUTHORIZED, "Erreur de base de données"))?;
 
         if let Some(u) = user {
-            Ok(AuthUser(SessionUser {
+            Ok(BearerAuthUser(SessionUser {
                 id: u.id,
                 signature: u.signature,
                 name: u.name,
@@ -144,12 +144,34 @@ where
                 created_at: u.created_at,
             }))
         } else {
-            Err((StatusCode::UNAUTHORIZED, "Session expirée"))
+            Err((StatusCode::UNAUTHORIZED, "Signature invalide"))
         }
     }
 }
 
-/// Middleware simple qui vérifie le rôle admin
+/// Middleware qui vérifie le rôle admin avec Bearer Token
+pub async fn require_admin_bearer(
+    BearerAuthUser(user): BearerAuthUser,
+) -> Result<BearerAuthUser, Response> {
+    if user.role == "admin" {
+        Ok(BearerAuthUser(user))
+    } else {
+        Err((StatusCode::FORBIDDEN, "Accès admin requis").into_response())
+    }
+}
+
+/// Middleware qui vérifie le rôle manager ou admin avec Bearer Token
+pub async fn require_manager_or_admin_bearer(
+    BearerAuthUser(user): BearerAuthUser,
+) -> Result<BearerAuthUser, Response> {
+    if user.role == "admin" || user.role == "manager" {
+        Ok(BearerAuthUser(user))
+    } else {
+        Err((StatusCode::FORBIDDEN, "Accès manager ou admin requis").into_response())
+    }
+}
+
+/// Middleware simple qui vérifie le rôle admin (pour compatibilité)
 pub async fn require_admin_role(
     AuthUser(user): AuthUser,
 ) -> Result<AuthUser, Response> {
@@ -160,7 +182,7 @@ pub async fn require_admin_role(
     }
 }
 
-/// Middleware simple qui vérifie le rôle manager ou admin
+/// Middleware simple qui vérifie le rôle manager ou admin (pour compatibilité)
 pub async fn require_manager_or_admin_role(
     AuthUser(user): AuthUser,
 ) -> Result<AuthUser, Response> {

@@ -14,6 +14,9 @@ DROP TABLE IF EXISTS properties CASCADE;
 DROP TABLE IF EXISTS roles CASCADE;
 DROP TABLE IF EXISTS users CASCADE;
 
+-- Créer l'enum pour les statuts de propriété
+CREATE TYPE property_status AS ENUM ('pending', 'validated', 'rejected');
+
 -- Table users avec role intégré
 CREATE TABLE users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -23,7 +26,7 @@ CREATE TABLE users (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Table properties
+-- Table properties avec le nouveau système de status
 CREATE TABLE properties (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     onchain_id TEXT NOT NULL UNIQUE,
@@ -38,9 +41,9 @@ CREATE TABLE properties (
     documents TEXT[],
     created_by UUID NOT NULL REFERENCES users(id),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    is_validated BOOLEAN NOT NULL DEFAULT FALSE,
-    validated_at TIMESTAMPTZ,
-    validated_by UUID REFERENCES users(id)
+    status property_status NOT NULL DEFAULT 'pending',
+    status_updated_at TIMESTAMPTZ,
+    status_updated_by UUID REFERENCES users(id)
 );
 
 -- Table investments
@@ -54,13 +57,6 @@ CREATE TABLE investments (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Table sessions
-CREATE TABLE sessions (
-    token UUID PRIMARY KEY,
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    expires_at TIMESTAMPTZ NOT NULL
-);
-CREATE INDEX idx_sessions_user_id ON sessions(user_id);
 
 -- Création d'un utilisateur administrateur par défaut (à modifier avec vos propres valeurs)
 INSERT INTO users (signature, name, role) 
