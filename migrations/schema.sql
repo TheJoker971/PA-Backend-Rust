@@ -16,7 +16,7 @@ DROP TABLE IF EXISTS users CASCADE;
 -- Création de la table users
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    signature TEXT NOT NULL UNIQUE,
+    wallet TEXT NOT NULL UNIQUE,
     name TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
 -- Création de la table roles
 CREATE TABLE IF NOT EXISTS roles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    signature TEXT NOT NULL UNIQUE,
+    wallet TEXT NOT NULL UNIQUE,
     role TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -89,7 +89,7 @@ DECLARE
     user_role TEXT;
 BEGIN
     SELECT role INTO user_role FROM roles
-    WHERE signature = wallet_address;
+    WHERE wallet = wallet_address;
     
     RETURN COALESCE(user_role, 'user');
 END;
@@ -110,28 +110,28 @@ CREATE POLICY "Admin et manager peuvent voir toutes les propriétés"
     ON properties FOR SELECT 
     TO authenticated
     USING (
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Seuls admin et manager peuvent créer des propriétés" 
     ON properties FOR INSERT 
     TO authenticated
     WITH CHECK (
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Seuls admin et manager peuvent modifier des propriétés" 
     ON properties FOR UPDATE 
     TO authenticated
     USING (
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Seuls admin peuvent supprimer des propriétés" 
     ON properties FOR DELETE 
     TO authenticated
     USING (
-        get_user_role(auth.jwt()->>'signature') = 'admin'
+        get_user_role(auth.jwt()->>'wallet') = 'admin'
     );
 
 -- Politiques RLS pour investments
@@ -140,7 +140,7 @@ CREATE POLICY "Utilisateurs peuvent voir leurs propres investissements"
     TO authenticated
     USING (
         user_id = auth.uid() OR
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Utilisateurs peuvent créer leurs propres investissements" 
@@ -155,7 +155,7 @@ CREATE POLICY "Seuls admin peuvent gérer les rôles"
     ON roles FOR ALL 
     TO authenticated
     USING (
-        get_user_role(auth.jwt()->>'signature') = 'admin'
+        get_user_role(auth.jwt()->>'wallet') = 'admin'
     );
 
 -- Politiques RLS pour users
@@ -164,7 +164,7 @@ CREATE POLICY "Utilisateurs peuvent voir leur propre profil"
     TO authenticated
     USING (
         id = auth.uid() OR
-        get_user_role(auth.jwt()->>'signature') IN ('admin', 'manager')
+        get_user_role(auth.jwt()->>'wallet') IN ('admin', 'manager')
     );
 
 CREATE POLICY "Utilisateurs peuvent modifier leur propre profil" 
@@ -172,5 +172,5 @@ CREATE POLICY "Utilisateurs peuvent modifier leur propre profil"
     TO authenticated
     USING (
         id = auth.uid() OR
-        get_user_role(auth.jwt()->>'signature') = 'admin'
+        get_user_role(auth.jwt()->>'wallet') = 'admin'
     );

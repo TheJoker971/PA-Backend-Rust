@@ -5,6 +5,35 @@ use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use bigdecimal::BigDecimal;
 
+// Enum pour les rôles utilisateur
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "user_role", rename_all = "lowercase")]
+pub enum UserRole {
+    User,
+    Manager,
+    Admin,
+}
+
+impl std::fmt::Display for UserRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserRole::User => write!(f, "user"),
+            UserRole::Manager => write!(f, "manager"),
+            UserRole::Admin => write!(f, "admin"),
+        }
+    }
+}
+
+impl From<String> for UserRole {
+    fn from(s: String) -> Self {
+        match s.to_lowercase().as_str() {
+            "manager" => UserRole::Manager,
+            "admin" => UserRole::Admin,
+            _ => UserRole::User,
+        }
+    }
+}
+
 // Enum pour le statut des propriétés
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "property_status", rename_all = "lowercase")]
@@ -37,9 +66,9 @@ impl From<String> for PropertyStatus {
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
 pub struct User {
     pub id: Uuid,
-    pub signature: String,
+    pub wallet: String,
     pub name: Option<String>,
-    pub role: String,
+    pub role: UserRole,
     pub created_at: DateTime<Utc>,
 }
 
@@ -85,9 +114,14 @@ pub struct Session {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateUserRequest {
-    pub signature: String,
+    pub wallet: String,
     pub name: String,
     pub role: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateUserRoleRequest {
+    pub role: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

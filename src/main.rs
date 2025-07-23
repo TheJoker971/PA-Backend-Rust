@@ -2,7 +2,7 @@
 
 use axum::{
     Router, 
-    routing::{get, post, put, delete}, 
+    routing::{get, post, put}, 
     Server,
 };
 use dotenvy::dotenv;
@@ -39,6 +39,10 @@ async fn main() {
         
         // Routes utilisateurs
         .route("/users", post(routes::create_user))
+        
+        // Routes utilisateurs protégées (admin seulement)
+        .route("/api/users", get(routes::get_all_users))
+        .route("/api/users/:id/role", put(routes::update_user_role))
         
         // Routes properties avec authentification Bearer Token
         // Routes publiques (anciennes pour compatibilité)
@@ -79,10 +83,12 @@ async fn main() {
 
     println!("🚀 Server running on http://{}", addr);
     println!("📋 Routes disponibles:");
-    println!("  - POST /auth/login (connexion par signature)");
+    println!("  - POST /auth/login (connexion par wallet)");
     println!("  - POST /auth/logout (déconnexion)");
     println!("  - GET  /health (vérification santé)");
     println!("  - POST /users (création utilisateur)");
+    println!("  - GET  /api/users (liste utilisateurs - Admin Bearer Token uniquement)");
+    println!("  - PUT  /api/users/:id/role (modifier rôle utilisateur - Admin Bearer Token uniquement)");
     println!("  - GET  /properties/public (propriétés validées - publique)");
     println!("  - GET  /api/properties (propriétés filtrées par rôle - Bearer Token requis)");
     println!("  - POST /api/properties (créer propriété - Manager/Admin Bearer Token)");

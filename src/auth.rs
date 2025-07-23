@@ -10,28 +10,28 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
-use crate::models::User;
+use crate::models::{User, UserRole};
 
 /// Structure renvoyée après connexion
 #[derive(Debug, Serialize)]
 pub struct SessionUser {
     pub id: Uuid,
-    pub signature: String,
+    pub wallet: String,
     pub name: Option<String>,
-    pub role: String,
+    pub role: UserRole,
     pub created_at: chrono::DateTime<Utc>,
 }
 
-/// Payload JSON pour le login par signature
+/// Payload JSON pour le login par wallet
 #[derive(Debug, Deserialize)]
 pub struct LoginRequest {
-    pub signature: String,
+    pub wallet: String,
 }
 
 /// Payload JSON pour l'authentification par bearer token
 #[derive(Debug, Deserialize)]
 pub struct BearerAuthRequest {
-    pub signature: String,
+    pub wallet: String,
 }
 
 /// Handler `POST /auth/login` (simplifié sans sessions)
@@ -39,23 +39,23 @@ pub async fn login(
     State(pool): State<PgPool>,
     Json(payload): Json<LoginRequest>,
 ) -> Response {
-    // Récupérer l'utilisateur par signature
+    // Récupérer l'utilisateur par wallet
     let user = match sqlx::query_as!(
         User,
-        r#"SELECT id, signature, name, role, created_at
+        r#"SELECT id, wallet, name, role as "role: UserRole", created_at
            FROM users
-           WHERE signature = $1"#, payload.signature
+           WHERE wallet = $1"#, payload.wallet
     )
     .fetch_optional(&pool)
     .await
     .unwrap() {
         Some(u) => u,
-        _ => return (StatusCode::UNAUTHORIZED, "Signature invalide").into_response(),
+        _ => return (StatusCode::UNAUTHORIZED, "Wallet invalide").into_response(),
     };
 
     let session_user = SessionUser {
         id: user.id,
-        signature: user.signature,
+        wallet: user.wallet,
         name: user.name,
         role: user.role,
         created_at: user.created_at,
@@ -116,7 +116,7 @@ where
             return Err((StatusCode::UNAUTHORIZED, "Token Bearer requis"));
         }
 
-        let signature = auth_header.strip_prefix("Bearer ").unwrap().trim();
+        let wallet = auth_header.strip_prefix("Bearer ").unwrap().trim();
 
         // Récupérer le pool
         let pool = parts.extensions
@@ -124,12 +124,12 @@ where
             .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Pool manquant"))?
             .clone();
 
-        // Récupérer l'utilisateur par signature
+        // Récupérer l'utilisateur par wallet
         let user = sqlx::query_as!(
             User,
-            r#"SELECT id, signature, name, role, created_at
+            r#"SELECT id, wallet, name, role as "role: UserRole", created_at
                FROM users
-               WHERE signature = $1"#, signature
+               WHERE wallet = $1"#, wallet
         )
         .fetch_optional(&pool)
         .await
@@ -138,13 +138,13 @@ where
         if let Some(u) = user {
             Ok(BearerAuthUser(SessionUser {
                 id: u.id,
-                signature: u.signature,
+                wallet: u.wallet,
                 name: u.name,
                 role: u.role,
                 created_at: u.created_at,
             }))
         } else {
-            Err((StatusCode::UNAUTHORIZED, "Signature invalide"))
+            Err((StatusCode::UNAUTHORIZED, "Wallet invalide"))
         }
     }
 }
@@ -153,7 +153,7 @@ where
 pub async fn require_admin_bearer(
     BearerAuthUser(user): BearerAuthUser,
 ) -> Result<BearerAuthUser, Response> {
-    if user.role == "admin" {
+    if matches!(user.role, UserRole::Admin) {
         Ok(BearerAuthUser(user))
     } else {
         Err((StatusCode::FORBIDDEN, "Accès admin requis").into_response())
@@ -164,7 +164,7 @@ pub async fn require_admin_bearer(
 pub async fn require_manager_or_admin_bearer(
     BearerAuthUser(user): BearerAuthUser,
 ) -> Result<BearerAuthUser, Response> {
-    if user.role == "admin" || user.role == "manager" {
+    if matches!(user.role, UserRole::Admin | UserRole::Manager) {
         Ok(BearerAuthUser(user))
     } else {
         Err((StatusCode::FORBIDDEN, "Accès manager ou admin requis").into_response())
@@ -175,7 +175,7 @@ pub async fn require_manager_or_admin_bearer(
 pub async fn require_admin_role(
     AuthUser(user): AuthUser,
 ) -> Result<AuthUser, Response> {
-    if user.role == "admin" {
+    if matches!(user.role, UserRole::Admin) {
         Ok(AuthUser(user))
     } else {
         Err((StatusCode::FORBIDDEN, "Accès admin requis").into_response())
@@ -186,7 +186,7 @@ pub async fn require_admin_role(
 pub async fn require_manager_or_admin_role(
     AuthUser(user): AuthUser,
 ) -> Result<AuthUser, Response> {
-    if user.role == "admin" || user.role == "manager" {
+    if matches!(user.role, UserRole::Admin | UserRole::Manager) {
         Ok(AuthUser(user))
     } else {
         Err((StatusCode::FORBIDDEN, "Accès manager ou admin requis").into_response())

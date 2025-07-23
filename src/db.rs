@@ -4,6 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::env;
 use std::time::Duration;
+use crate::models::UserRole;
 
 pub async fn init_db() -> PgPool {
     // Récupérer l'URL de connexion à Supabase
@@ -18,15 +19,15 @@ pub async fn init_db() -> PgPool {
         .expect("Failed to connect to Supabase database")
 }
 
-// Fonction utilitaire pour obtenir le rôle d'un utilisateur par signature
-pub async fn get_user_role(pool: &PgPool, signature: &str) -> String {
-    // Récupérer le rôle directement depuis la table users
-    sqlx::query_scalar!(
-        r#"SELECT role FROM users WHERE signature = $1"#,
-        signature
+// Fonction utilitaire pour obtenir le rôle d'un utilisateur par wallet
+pub async fn get_user_role(pool: &PgPool, wallet: &str) -> UserRole {
+    let role = sqlx::query!(
+        r#"SELECT role as "role: UserRole" FROM users WHERE wallet = $1"#,
+        wallet
     )
     .fetch_optional(pool)
     .await
-    .unwrap_or(None)
-    .unwrap_or_else(|| "user".to_string())
+    .unwrap_or(None);
+
+    role.map(|r| r.role).unwrap_or(UserRole::User)
 }

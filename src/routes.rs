@@ -10,8 +10,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 use chrono::Utc;
 
-use crate::models::{CreateUserRequest, Property, CreatePropertyRequest, UpdatePropertyStatusRequest, PropertyStatus, Investment, CreateInvestmentRequest, UpdateInvestmentRequest};
-use crate::auth::{BearerAuthUser, require_admin_bearer, require_manager_or_admin_bearer};
+use crate::models::{CreateUserRequest, UpdateUserRoleRequest, Property, CreatePropertyRequest, UpdatePropertyStatusRequest, PropertyStatus, Investment, CreateInvestmentRequest, UpdateInvestmentRequest, User, UserRole};
+use crate::auth::BearerAuthUser;
 
 // Route de santé
 pub async fn health_check() -> impl IntoResponse {
@@ -26,15 +26,16 @@ pub async fn create_user(
     State(pool): State<PgPool>,
     Json(payload): Json<CreateUserRequest>,
 ) -> impl IntoResponse {
-    let role = payload.role.unwrap_or_else(|| "user".to_string());
+    let role_str = payload.role.unwrap_or_else(|| "user".to_string());
+    let role: UserRole = role_str.into();
     
     match sqlx::query!(
-        r#"INSERT INTO users (signature, name, role)
+        r#"INSERT INTO users (wallet, name, role)
         VALUES ($1, $2, $3)
         RETURNING id"#,
-        payload.signature,
+        payload.wallet,
         payload.name,
-        role
+        role as UserRole
     )
     .fetch_one(&pool)
     .await {
@@ -99,7 +100,7 @@ pub async fn create_property(
     Json(payload): Json<CreatePropertyRequest>,
 ) -> impl IntoResponse {
     // Vérifier le rôle
-    if user.role != "admin" && user.role != "manager" {
+    if !matches!(user.role, UserRole::Admin | UserRole::Manager) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Accès manager ou admin requis"
         }))).into_response();
@@ -159,8 +160,8 @@ pub async fn get_all_properties(
     BearerAuthUser(user): BearerAuthUser,
     State(pool): State<PgPool>,
 ) -> impl IntoResponse {
-    let properties_result = match user.role.as_str() {
-        "admin" => {
+    let properties_result = match user.role {
+        UserRole::Admin => {
             sqlx::query_as!(
                 Property,
                 r#"SELECT id, onchain_id, name, location, type as property_type, description, 
@@ -173,7 +174,7 @@ pub async fn get_all_properties(
             .fetch_all(&pool)
             .await
         }
-        "manager" => {
+        UserRole::Manager => {
             sqlx::query_as!(
                 Property,
                 r#"SELECT id, onchain_id, name, location, type as property_type, description, 
@@ -188,7 +189,7 @@ pub async fn get_all_properties(
             .fetch_all(&pool)
             .await
         }
-        "user" => {
+        UserRole::User => {
             sqlx::query_as!(
                 Property,
                 r#"SELECT DISTINCT p.id, p.onchain_id, p.name, p.location, p.type as property_type, p.description, 
@@ -203,13 +204,6 @@ pub async fn get_all_properties(
             )
             .fetch_all(&pool)
             .await
-        }
-        _ => {
-            // Pour tout autre rôle, retourner une liste vide.
-            return (StatusCode::OK, Json(serde_json::json!({
-                "properties": [],
-                "count": 0
-            }))).into_response();
         }
     };
 
@@ -260,7 +254,7 @@ pub async fn update_property(
     Json(payload): Json<CreatePropertyRequest>,
 ) -> impl IntoResponse {
     // Vérifier le rôle
-    if user.role != "admin" && user.role != "manager" {
+    if !matches!(user.role, UserRole::Admin | UserRole::Manager) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Accès manager ou admin requis"
         }))).into_response();
@@ -283,7 +277,7 @@ pub async fn update_property(
     };
 
     // Empêcher la modification si la property est validée (sauf pour l'admin)
-    if matches!(existing_property.status, PropertyStatus::Validated) && user.role != "admin" {
+    if matches!(existing_property.status, PropertyStatus::Validated) && !matches!(user.role, UserRole::Admin) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Impossible de modifier une propriété validée par l'admin"
         }))).into_response();
@@ -344,7 +338,7 @@ pub async fn update_property_status(
     Json(payload): Json<UpdatePropertyStatusRequest>,
 ) -> impl IntoResponse {
     // Seul l'admin peut modifier le statut
-    if user.role != "admin" {
+    if !matches!(user.role, UserRole::Admin) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Seul l'admin peut modifier le statut des propriétés"
         }))).into_response();
@@ -401,7 +395,7 @@ pub async fn delete_property(
     Path(property_id): Path<Uuid>,
 ) -> impl IntoResponse {
     // Seul l'admin peut supprimer
-    if user.role != "admin" {
+    if !matches!(user.role, UserRole::Admin) {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Seul l'admin peut supprimer des propriétés"
         }))).into_response();
@@ -445,16 +439,12 @@ pub async fn delete_property(
 // Routes pour les Investissements
 
 /// Route pour récupérer tous les investissements (authentification requise)
-/// Le comportement diffère selon le rôle de l'utilisateur :
-/// - Admin: voit tous les investissements
-/// - Manager: voit les investissements liés aux propriétés qu'il a créées
-/// - User: voit uniquement ses propres investissements
 pub async fn get_all_investments(
     BearerAuthUser(user): BearerAuthUser,
     State(pool): State<PgPool>,
 ) -> impl IntoResponse {
-    let investments_result = match user.role.as_str() {
-        "admin" => {
+    let investments_result = match user.role {
+        UserRole::Admin => {
             sqlx::query_as!(
                 Investment,
                 r#"SELECT id, user_id, property_id, amount_eth, shares, tx_hash, created_at
@@ -464,7 +454,7 @@ pub async fn get_all_investments(
             .fetch_all(&pool)
             .await
         }
-        "manager" => {
+        UserRole::Manager => {
             sqlx::query_as!(
                 Investment,
                 r#"SELECT i.id, i.user_id, i.property_id, i.amount_eth, i.shares, i.tx_hash, i.created_at
@@ -477,7 +467,7 @@ pub async fn get_all_investments(
             .fetch_all(&pool)
             .await
         }
-        "user" => {
+        UserRole::User => {
             sqlx::query_as!(
                 Investment,
                 r#"SELECT id, user_id, property_id, amount_eth, shares, tx_hash, created_at
@@ -488,12 +478,6 @@ pub async fn get_all_investments(
             )
             .fetch_all(&pool)
             .await
-        }
-        _ => {
-            return (StatusCode::OK, Json(serde_json::json!({
-                "investments": [],
-                "count": 0
-            }))).into_response();
         }
     };
 
@@ -585,22 +569,21 @@ pub async fn get_investment_by_id(
     };
 
     // Contrôle d'accès selon le rôle
-    let has_access = match user.role.as_str() {
-        "admin" => true,
-        "user" => investment.user_id == user.id,
-        "manager" => {
+    let has_access = match user.role {
+        UserRole::Admin => true,
+        UserRole::User => investment.user_id == user.id,
+        UserRole::Manager => {
             // Vérifier si la propriété appartient au manager
-                         match sqlx::query!(
-                 "SELECT created_by FROM properties WHERE id = $1",
-                 investment.property_id
-             )
-             .fetch_optional(&pool)
-             .await {
-                 Ok(Some(prop)) => prop.created_by == user.id,
-                 _ => false,
-             }
+            match sqlx::query!(
+                "SELECT created_by FROM properties WHERE id = $1",
+                investment.property_id
+            )
+            .fetch_optional(&pool)
+            .await {
+                Ok(Some(prop)) => prop.created_by == user.id,
+                _ => false,
+            }
         }
-        _ => false,
     };
 
     if !has_access {
@@ -636,7 +619,7 @@ pub async fn update_investment(
     };
 
     // Contrôle d'accès : seul l'admin ou le propriétaire peut modifier
-    if user.role != "admin" && existing_investment.user_id != user.id {
+    if !matches!(user.role, UserRole::Admin) && existing_investment.user_id != user.id {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Seul l'admin ou le propriétaire peut modifier cet investissement"
         }))).into_response();
@@ -688,7 +671,7 @@ pub async fn delete_investment(
     };
 
     // Contrôle d'accès : seul l'admin ou le propriétaire peut supprimer
-    if user.role != "admin" && existing_investment.user_id != user.id {
+    if !matches!(user.role, UserRole::Admin) && existing_investment.user_id != user.id {
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({
             "error": "Seul l'admin ou le propriétaire peut supprimer cet investissement"
         }))).into_response();
@@ -702,6 +685,98 @@ pub async fn delete_investment(
         }))).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
             "error": format!("Erreur lors de la suppression: {}", e.to_string())
+        }))).into_response(),
+    }
+}
+
+/// Route pour mettre à jour le rôle d'un utilisateur (admin seulement)
+pub async fn update_user_role(
+    BearerAuthUser(admin_user): BearerAuthUser,
+    State(pool): State<PgPool>,
+    Path(user_id): Path<Uuid>,
+    Json(payload): Json<UpdateUserRoleRequest>,
+) -> impl IntoResponse {
+    // Seul l'admin peut modifier les rôles
+    if !matches!(admin_user.role, UserRole::Admin) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({
+            "error": "Seul l'admin peut modifier les rôles des utilisateurs"
+        }))).into_response();
+    }
+
+    // Convertir le rôle string en enum
+    let new_role: UserRole = payload.role.into();
+    let role_display = new_role; // Copy pour le message
+
+    // Vérifier que l'utilisateur existe
+    let existing_user = match sqlx::query!(
+        r#"SELECT id, wallet, name, role as "role: UserRole" FROM users WHERE id = $1"#,
+        user_id
+    )
+    .fetch_optional(&pool)
+    .await {
+        Ok(Some(user)) => user,
+        Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+            "error": "Utilisateur non trouvé"
+        }))).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("Erreur lors de la vérification: {}", e.to_string())
+        }))).into_response(),
+    };
+
+    // Empêcher l'admin de modifier son propre rôle
+    if existing_user.id == admin_user.id {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({
+            "error": "Impossible de modifier son propre rôle"
+        }))).into_response();
+    }
+
+    // Mettre à jour le rôle
+    match sqlx::query_as!(
+        User,
+        r#"UPDATE users SET role = $2
+           WHERE id = $1
+           RETURNING id, wallet, name, role as "role: UserRole", created_at"#,
+        user_id,
+        new_role as UserRole
+    )
+    .fetch_one(&pool)
+    .await {
+        Ok(updated_user) => (StatusCode::OK, Json(serde_json::json!({
+            "user": updated_user,
+            "message": format!("Rôle de l'utilisateur mis à jour vers '{}'", role_display)
+        }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("Erreur lors de la mise à jour: {}", e.to_string())
+        }))).into_response(),
+    }
+}
+
+/// Route pour lister tous les utilisateurs (admin seulement)
+pub async fn get_all_users(
+    BearerAuthUser(admin_user): BearerAuthUser,
+    State(pool): State<PgPool>,
+) -> impl IntoResponse {
+    // Seul l'admin peut voir tous les utilisateurs
+    if !matches!(admin_user.role, UserRole::Admin) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({
+            "error": "Seul l'admin peut voir tous les utilisateurs"
+        }))).into_response();
+    }
+
+    match sqlx::query_as!(
+        User,
+        r#"SELECT id, wallet, name, role as "role: UserRole", created_at
+           FROM users 
+           ORDER BY created_at DESC"#
+    )
+    .fetch_all(&pool)
+    .await {
+        Ok(users) => (StatusCode::OK, Json(serde_json::json!({
+            "users": users,
+            "count": users.len()
+        }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("Erreur lors de la récupération: {}", e.to_string())
         }))).into_response(),
     }
 }

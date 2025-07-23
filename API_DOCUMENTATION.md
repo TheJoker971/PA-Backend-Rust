@@ -5,12 +5,12 @@
 Toutes les routes de l'API, sauf `POST /auth/login`, `POST /auth/logout`, `GET /health` et `GET /properties/public`, nécessitent une authentification via un **Bearer Token** dans le header `Authorization`.
 
 - **Header** : `Authorization`
-- **Format** : `Bearer <signature_utilisateur>`
+- **Format** : `Bearer <adresse_wallet_utilisateur>`
 
 ### Exemple
 
 ```bash
-curl -H "Authorization: Bearer VOTRE_SIGNATURE_HEXADECIMALE" [URL_DE_LA_ROUTE]
+curl -H "Authorization: Bearer VOTRE_ADRESSE_WALLET" [URL_DE_LA_ROUTE]
 ```
 
 ---
@@ -21,23 +21,23 @@ curl -H "Authorization: Bearer VOTRE_SIGNATURE_HEXADECIMALE" [URL_DE_LA_ROUTE]
 
 #### `POST /auth/login`
 
-Permet à un utilisateur de se connecter en fournissant sa signature. Retourne les informations de l'utilisateur.
+Permet à un utilisateur de se connecter en fournissant son adresse wallet. Retourne les informations de l'utilisateur.
 
 - **Méthode** : `POST`
 - **Headers** : `Content-Type: application/json`
 - **Body** :
   ```json
   {
-    "signature": "string"
+    "wallet": "string"
   }
   ```
 - **Réponse (200 OK)** :
   ```json
   {
     "id": "uuid",
-    "signature": "string",
+    "wallet": "string",
     "name": "string",
-    "role": "string",
+    "role": "string ('user', 'manager', 'admin')",
     "created_at": "string (timestamp)"
   }
   ```
@@ -82,7 +82,7 @@ Crée un nouvel utilisateur.
 - **Body** :
   ```json
   {
-    "signature": "string",
+    "wallet": "string",
     "name": "string",
     "role": "string (optionnel, 'user' par défaut)"
   }
@@ -94,6 +94,33 @@ Crée un nouvel utilisateur.
     "message": "Utilisateur créé avec succès"
   }
   ```
+
+#### Routes Admin
+
+##### `GET /api/users`
+
+Retourne la liste de tous les utilisateurs.
+
+- **Méthode** : `GET`
+- **Headers** : `Authorization: Bearer <wallet_admin>`
+- **Body** : Aucun
+- **Rôle requis** : `admin`
+
+##### `PUT /api/users/:id/role`
+
+Met à jour le rôle d'un utilisateur.
+
+- **Méthode** : `PUT`
+- **Headers** : `Authorization: Bearer <wallet_admin>`, `Content-Type: application/json`
+- **URL Paramètre** : `id` (UUID de l'utilisateur)
+- **Body** :
+  ```json
+  {
+    "role": "string ('user', 'manager', 'admin')"
+  }
+  ```
+- **Rôle requis** : `admin`
+- **Restriction** : Un admin ne peut pas modifier son propre rôle.
 
 ### Propriétés (Properties)
 
@@ -136,7 +163,7 @@ Retourne la liste de toutes les propriétés dont le statut est **validé**.
 Retourne une liste de propriétés en fonction du rôle de l'utilisateur.
 
 - **Méthode** : `GET`
-- **Headers** : `Authorization: Bearer <signature>`
+- **Headers** : `Authorization: Bearer <wallet>`
 - **Body** : Aucun
 - **Comportement par rôle** :
   - `admin` : Voit toutes les propriétés, sans filtre.
@@ -148,7 +175,7 @@ Retourne une liste de propriétés en fonction du rôle de l'utilisateur.
 Crée une nouvelle propriété avec le statut `pending`.
 
 - **Méthode** : `POST`
-- **Headers** : `Authorization: Bearer <signature>`, `Content-Type: application/json`
+- **Headers** : `Authorization: Bearer <wallet>`, `Content-Type: application/json`
 - **Body** :
   ```json
   {
@@ -171,7 +198,7 @@ Crée une nouvelle propriété avec le statut `pending`.
 Retourne les détails d'une propriété spécifique.
 
 - **Méthode** : `GET`
-- **Headers** : `Authorization: Bearer <signature>`
+- **Headers** : `Authorization: Bearer <wallet>`
 - **URL Paramètre** : `id` (UUID de la propriété)
 - **Body** : Aucun
 - **Rôle requis** : `user`, `manager`, `admin`
@@ -181,7 +208,7 @@ Retourne les détails d'une propriété spécifique.
 Met à jour une propriété.
 
 - **Méthode** : `PUT`
-- **Headers** : `Authorization: Bearer <signature>`, `Content-Type: application/json`
+- **Headers** : `Authorization: Bearer <wallet>`, `Content-Type: application/json`
 - **URL Paramètre** : `id` (UUID de la propriété)
 - **Body** : Identique à `POST /api/properties`
 - **Rôle requis** : `manager`, `admin`
@@ -192,7 +219,7 @@ Met à jour une propriété.
 Met à jour le statut d'une propriété.
 
 - **Méthode** : `PUT`
-- **Headers** : `Authorization: Bearer <signature>`, `Content-Type: application/json`
+- **Headers** : `Authorization: Bearer <wallet>`, `Content-Type: application/json`
 - **URL Paramètre** : `id` (UUID de la propriété)
 - **Body** :
   ```json
@@ -207,7 +234,7 @@ Met à jour le statut d'une propriété.
 Supprime une propriété.
 
 - **Méthode** : `DELETE`
-- **Headers** : `Authorization: Bearer <signature>`
+- **Headers** : `Authorization: Bearer <wallet>`
 - **URL Paramètre** : `id` (UUID de la propriété)
 - **Body** : Aucun
 - **Rôle requis** : `admin`
@@ -222,7 +249,7 @@ Supprime une propriété.
 Retourne une liste d'investissements en fonction du rôle de l'utilisateur.
 
 - **Méthode** : `GET`
-- **Headers** : `Authorization: Bearer <signature>`
+- **Headers** : `Authorization: Bearer <wallet>`
 - **Body** : Aucun
 - **Comportement par rôle** :
   - `admin` : Voit tous les investissements.
@@ -251,7 +278,7 @@ Retourne une liste d'investissements en fonction du rôle de l'utilisateur.
 Crée un nouvel investissement.
 
 - **Méthode** : `POST`
-- **Headers** : `Authorization: Bearer <signature>`, `Content-Type: application/json`
+- **Headers** : `Authorization: Bearer <wallet>`, `Content-Type: application/json`
 - **Body** :
   ```json
   {
@@ -270,7 +297,7 @@ Crée un nouvel investissement.
 Retourne les détails d'un investissement spécifique.
 
 - **Méthode** : `GET`
-- **Headers** : `Authorization: Bearer <signature>`
+- **Headers** : `Authorization: Bearer <wallet>`
 - **URL Paramètre** : `id` (UUID de l'investissement)
 - **Body** : Aucun
 - **Contrôle d'accès** :
@@ -283,7 +310,7 @@ Retourne les détails d'un investissement spécifique.
 Met à jour un investissement.
 
 - **Méthode** : `PUT`
-- **Headers** : `Authorization: Bearer <signature>`, `Content-Type: application/json`
+- **Headers** : `Authorization: Bearer <wallet>`, `Content-Type: application/json`
 - **URL Paramètre** : `id` (UUID de l'investissement)
 - **Body** :
   ```json
@@ -300,7 +327,7 @@ Met à jour un investissement.
 Supprime un investissement.
 
 - **Méthode** : `DELETE`
-- **Headers** : `Authorization: Bearer <signature>`
+- **Headers** : `Authorization: Bearer <wallet>`
 - **URL Paramètre** : `id` (UUID de l'investissement)
 - **Body** : Aucun
 - **Contrôle d'accès** : Seul l'`admin` ou le propriétaire de l'investissement peut le supprimer.
